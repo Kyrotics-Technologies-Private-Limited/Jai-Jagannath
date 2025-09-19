@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+    "Noto Color Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+
+  /* Temple Dashboard Theme */
+  --background: 15 23 42; /* slate-900 */
+  --foreground: 248 250 252; /* slate-50 */
+  --card: 30 41 59; /* slate-800 */
+  --card-foreground: 248 250 252; /* slate-50 */
+  --popover: 30 41 59; /* slate-800 */
+  --popover-foreground: 248 250 252; /* slate-50 */
+  --primary: 251 191 36; /* amber-400 - temple gold */
+  --primary-foreground: 15 23 42; /* slate-900 */
+  --secondary: 51 65 85; /* slate-700 */
+  --secondary-foreground: 248 250 252; /* slate-50 */
+  --muted: 51 65 85; /* slate-700 */
+  --muted-foreground: 148 163 184; /* slate-400 */
+  --accent: 59 130 246; /* blue-500 */
+  --accent-foreground: 248 250 252; /* slate-50 */
+  --destructive: 239 68 68; /* red-500 */
+  --destructive-foreground: 248 250 252; /* slate-50 */
+  --border: 51 65 85; /* slate-700 */
+  --input: 51 65 85; /* slate-700 */
+  --ring: 251 191 36; /* amber-400 */
+  --radius: 0.5rem;
+}
+
+body {
+  background-color: rgb(var(--background));
+  color: rgb(var(--foreground));
+  font-family: var(--font-sans);
+}
+
+.chart-container {
+  background: linear-gradient(135deg, rgb(30 41 59) 0%, rgb(15 23 42) 100%);
+}
+
+.stat-card {
+  background: linear-gradient(135deg, rgb(30 41 59) 0%, rgb(51 65 85) 100%);
+  border: 1px solid rgb(51 65 85);
+}
+
+.video-feed {
+  background: linear-gradient(135deg, rgb(15 23 42) 0%, rgb(30 41 59) 100%);
+}
