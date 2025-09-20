@@ -297,15 +297,45 @@ function App() {
     if (!dailyObj) return null
     const baseMs = Date.now() + dayOffset * 86400000
     const { year, month, day } = getTZParts(baseMs, "Asia/Kolkata")
-    const y = dailyObj?.[year]
-    const m = y?.[month]
-    const v = m?.[day]
+    
+    // Check IST date first
+    let y = dailyObj?.[year]
+    let m = y?.[month]
+    let v = m?.[day]
+    
+    // If not found, check UTC date (subtract 5.5 hours to get UTC date)
+    if (v === null || v === undefined) {
+      const utcMs = baseMs - (5.5 * 60 * 60 * 1000)
+      const utcDate = new Date(utcMs)
+      const utcYear = utcDate.getFullYear()
+      const utcMonth = (utcDate.getMonth() + 1).toString().padStart(2, '0')
+      const utcDay = utcDate.getDate().toString().padStart(2, '0')
+      
+      y = dailyObj?.[utcYear]
+      m = y?.[utcMonth]
+      v = m?.[utcDay]
+    }
+    
     return typeof v === "number" ? v : Number(v) || null
   }
 
   function msAtStartOfIST(dateStr: string): number {
     // dateStr in format YYYY-MM-DD
     return new Date(`${dateStr}T00:00:00+05:30`).getTime()
+  }
+
+  function getISTDateFromUTC(utcMs: number): string {
+    // Convert UTC timestamp to IST date string
+    const istDate = new Date(utcMs + (5.5 * 60 * 60 * 1000)) // Add 5.5 hours to UTC
+    const year = istDate.getFullYear()
+    const month = (istDate.getMonth() + 1).toString().padStart(2, '0')
+    const day = istDate.getDate().toString().padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  function getISTHourFromUTC(utcHour: number): number {
+    // Convert UTC hour to IST hour
+    return (utcHour + 5) % 24
   }
 
   function generateDayWiseData(
@@ -328,7 +358,21 @@ function App() {
     let total = 0
     for (let ms = start; ms <= end; ms += 86400000) {
       const { year, month, day } = getTZParts(ms, "Asia/Kolkata")
-      const val = dailyObj?.[year]?.[month]?.[day]
+      
+      // Check IST date first
+      let val = dailyObj?.[year]?.[month]?.[day]
+      
+      // If not found, check UTC date
+      if (val === null || val === undefined) {
+        const utcMs = ms - (5.5 * 60 * 60 * 1000)
+        const utcDate = new Date(utcMs)
+        const utcYear = utcDate.getFullYear()
+        const utcMonth = (utcDate.getMonth() + 1).toString().padStart(2, '0')
+        const utcDay = utcDate.getDate().toString().padStart(2, '0')
+        
+        val = dailyObj?.[utcYear]?.[utcMonth]?.[utcDay]
+      }
+      
       const count = typeof val === "number" ? val : Number(val) || null
       if (typeof count === "number") total += count
       
@@ -379,8 +423,18 @@ function App() {
     let total = 0
     
     for (let ms = start; ms <= end; ms += 86400000) {
+      // Get IST date for this day
+      const istDateStr = getISTDateFromUTC(ms)
       const { year, month, day } = getTZParts(ms, "Asia/Kolkata")
-      const dayData = hourlyObj?.[year]?.[month]?.[day]
+      
+      // Check both IST date and UTC date in database
+      const dayDataIST = hourlyObj?.[year]?.[month]?.[day]
+      const istYear = istDateStr.split('-')[0]
+      const istMonth = istDateStr.split('-')[1]
+      const istDay = istDateStr.split('-')[2]
+      const dayDataUTC = hourlyObj?.[istYear]?.[istMonth]?.[istDay]
+      
+      const dayData = dayDataIST || dayDataUTC
       
       if (!dayData) {
         out.push({ ms, label: formatDateAsiaKolkata(ms) + ` (${startTime} - ${endTime} IST)`, count: null })
@@ -464,8 +518,18 @@ function App() {
     let total = 0
     
     for (let ms = start; ms <= end; ms += 86400000) {
+      // Get IST date for this day
+      const istDateStr = getISTDateFromUTC(ms)
       const { year, month, day } = getTZParts(ms, "Asia/Kolkata")
-      const dayData = minutelyObj?.[year]?.[month]?.[day]
+      
+      // Check both IST date and UTC date in database
+      const dayDataIST = minutelyObj?.[year]?.[month]?.[day]
+      const istYear = istDateStr.split('-')[0]
+      const istMonth = istDateStr.split('-')[1]
+      const istDay = istDateStr.split('-')[2]
+      const dayDataUTC = minutelyObj?.[istYear]?.[istMonth]?.[istDay]
+      
+      const dayData = dayDataIST || dayDataUTC
       
       if (!dayData) {
         out.push({ ms, label: formatDateAsiaKolkata(ms) + ` (${startTime} - ${endTime} IST)`, count: null })
@@ -655,13 +719,16 @@ function App() {
           const dayData = monthData[day]
           const hours = Object.keys(dayData).sort((a, b) => Number(a) - Number(b))
           
-          // Format date in IST
-          const dateIST = formatDateAsiaKolkata(msAtStartOfIST(`${year}-${month}-${day}`))
+          // Create UTC timestamp for this day
+          const utcMs = new Date(`${year}-${month}-${day}T00:00:00Z`).getTime()
+          // Convert to IST date
+          const istDateStr = getISTDateFromUTC(utcMs)
+          const dateIST = formatDateAsiaKolkata(msAtStartOfIST(istDateStr))
           
           hours.forEach(hourUTC => {
             const count = dayData[hourUTC]
             // Convert UTC hour to IST hour for display
-            const hourIST = (parseInt(hourUTC) + 5) % 24 // Add 5 hours for IST
+            const hourIST = getISTHourFromUTC(parseInt(hourUTC))
             const hourISTStr = hourIST.toString().padStart(2, '0')
             const timeRange = `${hourISTStr}:00 - ${hourISTStr}:59`
             
