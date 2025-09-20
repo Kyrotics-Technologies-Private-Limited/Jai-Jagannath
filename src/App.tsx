@@ -26,6 +26,15 @@ function App() {
   const [yearlyTotal, setYearlyTotal] = useState<number | null>(null)
   const TARGET_YEAR = 2025
 
+  // Exit aggregates
+  const [exitLiveMinuteCount, setExitLiveMinuteCount] = useState<number | null>(null)
+  const [exitLastHourCount, setExitLastHourCount] = useState<number | null>(null)
+  const [exitTodaysTotal, setExitTodaysTotal] = useState<number | null>(null)
+  const [exitMonthlyTotal, setExitMonthlyTotal] = useState<number | null>(null)
+  const [exitYesterdaysTotal, setExitYesterdaysTotal] = useState<number | null>(null)
+  const [exitYearlyTotal, setExitYearlyTotal] = useState<number | null>(null)
+  const [dailyExit, setDailyExit] = useState<any | null>(null)
+
   // Date-wise filtering (IST only)
   const [dailyEntrance, setDailyEntrance] = useState<any | null>(null)
   const [filterStartDate, setFilterStartDate] = useState<string>(() => {
@@ -93,6 +102,47 @@ function App() {
       const obj = snap.val() || {}
       const val = obj?.[String(TARGET_YEAR)]
       setYearlyTotal(typeof val === "number" ? val : Number(val) || null)
+    })
+
+    return () => {
+      unsubDaily()
+      unsubHourly()
+      unsubMinutely()
+      unsubMonthly()
+      unsubYearly()
+    }
+  }, [])
+
+  // Subscribe to aggregates for exit
+  useEffect(() => {
+    const dailyRef = ref(db, "aggregates/daily/exit")
+    const unsubDaily = onValue(dailyRef, (snap) => {
+      const dailyObj = snap.val()
+      setDailyExit(dailyObj)
+      setExitTodaysTotal(getDailyForTZDate(dailyObj, 0))
+      setExitYesterdaysTotal(getDailyForTZDate(dailyObj, -1))
+    })
+
+    const hourlyRef = ref(db, "aggregates/hourly/exit")
+    const unsubHourly = onValue(hourlyRef, (snap) => {
+      setExitLastHourCount(pickLatest4Level(snap.val()))
+    })
+
+    const minutelyRef = ref(db, "aggregates/minutely/exit")
+    const unsubMinutely = onValue(minutelyRef, (snap) => {
+      setExitLiveMinuteCount(pickLatest5Level(snap.val()))
+    })
+
+    const monthlyRef = ref(db, "aggregates/monthly/exit")
+    const unsubMonthly = onValue(monthlyRef, (snap) => {
+      setExitMonthlyTotal(pickLatest2Level(snap.val()))
+    })
+
+    const yearlyRef = ref(db, "aggregates/yearly/exit")
+    const unsubYearly = onValue(yearlyRef, (snap) => {
+      const obj = snap.val() || {}
+      const val = obj?.[String(TARGET_YEAR)]
+      setExitYearlyTotal(typeof val === "number" ? val : Number(val) || null)
     })
 
     return () => {
@@ -338,7 +388,11 @@ function App() {
     return typeof val === "number" ? val : Number(val) || null
   }
 
-  
+  // Compute current inside as today's entry minus today's exit
+  const insideCountToday: number | null =
+    typeof todaysTotal === "number" && typeof exitTodaysTotal === "number"
+      ? todaysTotal - exitTodaysTotal
+      : null
 
   return (
     <div className="min-h-screen bg-stone-100 text-foreground">
@@ -348,20 +402,24 @@ function App() {
             <div className="container mx-auto px-6 py-4">
               <div className="grid grid-cols-3 items-center">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-yellow-600 rounded text-white flex items-center justify-center font-bold">
-                    🏛️
+                  <div className="w-14 h-14 rounded-full overflow-hidden bg-white shadow-md">
+                    <img 
+                      src="/logo.png" 
+                      alt="Temple Logo" 
+                      className="w-full h-full object-contain"
+                    />
                   </div>
-                  <h1 className="text-xl font-semibold text-yellow-500">Temple FlowGuard</h1>
+                  <h1 className="text-xl font-semibold text-yellow-500">Jagannath Mandir</h1>
                 </div>
 
                 <div className="text-white text-sm justify-self-center">
                   CURRENTLY INSIDE:{" "}
                   <span className="text-blue-400 font-bold text-lg">
-                    {currentlyInside !== null ? currentlyInside.toLocaleString() : "—"}
+                    {insideCountToday !== null ? insideCountToday.toLocaleString() : "—"}
                   </span>
                 </div>
                 <div className="flex items-center gap-4 justify-self-end">
-                  <div className="text-sm text-gray-300">{formatAsiaKolkata(lastUpdateTs)}</div>
+                  <div className="text-sm text-gray-300">{formatAsiaKolkata(new Date().getTime())}</div>
                   <Button
                     variant="outline"
                     className="border-yellow-500 text-yellow-500 hover:bg-yellow-500 hover:text-slate-700 bg-transparent"
@@ -441,7 +499,6 @@ function App() {
                   </div>
                 </div>
 
-                {/* Removed duplicate filter in Entry card */}
               </CardContent>
             </Card>
           </div>
@@ -480,36 +537,35 @@ function App() {
                 {/* Live Statistics */}
                 <div className="grid grid-cols-3 gap-4">
                   <div className="text-center">
-                    <div className="text-xs text-gray-600 mb-1">LIVE COUNT:</div>
-                    <div className="text-3xl font-bold text-gray-900">38</div>
+                    <div className="text-xs text-gray-600 mb-1">LAST MINUTE</div>
+                    <div className="text-3xl font-bold text-gray-900">{exitLiveMinuteCount ?? "—"}</div>
                   </div>
                   <div className="text-center">
                     <div className="text-xs text-gray-600 mb-1">LAST HOUR</div>
-                    <div className="text-3xl font-bold text-gray-900">190</div>
+                    <div className="text-3xl font-bold text-gray-900">{exitLastHourCount ?? "—"}</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-xs text-gray-600 mb-1">TODAY'S TOTAL</div>
-                    <div className="text-3xl font-bold text-gray-900">1,650</div>
+                    <div className="text-xs text-gray-600 mb-1">{formatDateAsiaKolkata(Date.now())}</div>
+                    <div className="text-3xl font-bold text-gray-900">{exitTodaysTotal ?? "—"}</div>
                   </div>
                 </div>
 
                 {/* Extended Statistics */}
                 <div className="grid grid-cols-3 gap-4 pt-4 border-t border-gray-200">
                   <div className="text-center">
+                    <div className="text-xs text-gray-500 mb-1">YESTERDAY</div>
+                    <div className="text-2xl font-bold text-gray-900">{exitYesterdaysTotal ?? "—"}</div>
+                  </div>
+                  <div className="text-center">
                     <div className="text-xs text-gray-500 mb-1">MONTH'S TOTAL</div>
-                    <div className="text-2xl font-bold text-gray-900">32,100</div>
+                    <div className="text-2xl font-bold text-gray-900">{exitMonthlyTotal ?? "—"}</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-xs text-gray-500 mb-1">YEAR'S TOTAL</div>
-                    <div className="text-2xl font-bold text-gray-900">260,780</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-xs text-gray-500 mb-1">OVERALL TOTAL</div>
-                    <div className="text-2xl font-bold text-gray-900">800K</div>
+                    <div className="text-xs text-gray-500 mb-1">YEAR 2025</div>
+                    <div className="text-2xl font-bold text-gray-900">{exitYearlyTotal ?? "—"}</div>
                   </div>
                 </div>
 
-                {/* Removed duplicate filter in Exit card */}
               </CardContent>
             </Card>
           </div>
