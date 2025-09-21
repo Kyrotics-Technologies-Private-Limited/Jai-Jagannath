@@ -452,72 +452,78 @@ function App() {
     // Convert Kolkata time inputs to UTC for database filtering
     const [startHourStr, startMinStr] = startTime.split(':')
     const [endHourStr, endMinStr] = endTime.split(':')
-    const startHourKolkata = parseInt(startHourStr)
-    const startMinKolkata = parseInt(startMinStr)
-    const endHourKolkata = parseInt(endHourStr)
-    const endMinKolkata = parseInt(endMinStr)
     
-    // Convert Kolkata to UTC (subtract 5:30)
-    const startHourUTC = (startHourKolkata - 5 + (startMinKolkata - 30 < 0 ? -1 : 0) + 24) % 24
-    const startMinUTC = (startMinKolkata - 30 + 60) % 60
-    const endHourUTC = (endHourKolkata - 5 + (endMinKolkata - 30 < 0 ? -1 : 0) + 24) % 24
-    const endMinUTC = (endMinKolkata - 30 + 60) % 60
+    // Convert Kolkata to UTC using proper timezone conversion
+    const startKolkataTime = new Date(`2025-01-01T${startHourStr}:${startMinStr}:00+05:30`)
+    const endKolkataTime = new Date(`2025-01-01T${endHourStr}:${endMinStr}:00+05:30`)
+    
+    const startHourUTC = startKolkataTime.getUTCHours()
+    const startMinUTC = startKolkataTime.getUTCMinutes()
+    const endHourUTC = endKolkataTime.getUTCHours()
+    const endMinUTC = endKolkataTime.getUTCMinutes()
+    
+    console.log(`Time Filter Debug:`)
+    console.log(`Input: ${startTime} - ${endTime} (IST)`)
+    console.log(`Converted: ${startHourUTC}:${startMinUTC.toString().padStart(2, '0')} - ${endHourUTC}:${endMinUTC.toString().padStart(2, '0')} (UTC)`)
+    console.log(`Date range: ${startStr} to ${endStr}`)
+    console.log(`Hourly data available:`, Object.keys(hourlyObj))
+    console.log(`Full hourly data:`, hourlyObj)
     
     const out: Array<{ ms: number; label: string; count: number | null }> = []
     let total = 0
     
     for (let kolkataMs = start; kolkataMs <= end; kolkataMs += 86400000) {
-      // Convert Kolkata timestamp to UTC for database lookup
-      const utcMs = kolkataMs - (5.5 * 60 * 60 * 1000)
-      const utcDate = new Date(utcMs)
-      const utcYear = utcDate.getFullYear()
-      const utcMonth = (utcDate.getMonth() + 1).toString().padStart(2, '0')
-      const utcDay = utcDate.getDate().toString().padStart(2, '0')
-      
-      // Look up data using UTC date (database format)
-      const dayData = hourlyObj?.[utcYear]?.[utcMonth]?.[utcDay]
-      
-      if (!dayData) {
-        out.push({ ms: kolkataMs, label: formatDateAsiaKolkata(kolkataMs) + ` (${startTime} - ${endTime})`, count: null })
-        continue
-      }
-      
+      // Build explicit IST day string
+      const { year: istY, month: istM, day: istD } = getTZParts(kolkataMs, "Asia/Kolkata")
+      const istDateStr = `${istY}-${istM}-${istD}`
+
+      // Build precise IST start/end Date for this day, then read UTC parts
+      const startIST = new Date(`${istDateStr}T${startTime}:00+05:30`)
+      const endIST = new Date(`${istDateStr}T${endTime}:00+05:30`)
+
+      const startUTCYear = startIST.getUTCFullYear()
+      const startUTCMonth = (startIST.getUTCMonth() + 1).toString().padStart(2, '0')
+      const startUTCDay = startIST.getUTCDate().toString().padStart(2, '0')
+      const endUTCYear = endIST.getUTCFullYear()
+      const endUTCMonth = (endIST.getUTCMonth() + 1).toString().padStart(2, '0')
+      const endUTCDay = endIST.getUTCDate().toString().padStart(2, '0')
+
       let dayTotal = 0
-      const hours = Object.keys(dayData).sort((a, b) => Number(a) - Number(b))
-      
-      for (const hour of hours) {
-        const hourNum = parseInt(hour)
-        
-        // Check if this UTC hour falls within our UTC time range
-        let shouldIncludeHour = false
-        
-        if (startHourUTC === endHourUTC) {
-          // Same hour range in UTC
-          shouldIncludeHour = hourNum === startHourUTC
-        } else {
-          // Different hours in UTC
-          if (startHourUTC < endHourUTC) {
-            // Normal case: start < end
-            shouldIncludeHour = hourNum >= startHourUTC && hourNum <= endHourUTC
+
+      // Helper to sum hours within a UTC day with hour bounds
+      function sumHoursForDay(uy: string | number, um: string, ud: string, fromHour: number, toHour: number) {
+        const dy = hourlyObj?.[uy]?.[um]?.[ud]
+        if (!dy) return 0
+        const hourKeys = Object.keys(dy).sort((a, b) => Number(a) - Number(b))
+        let subtotal = 0
+        for (const hKey of hourKeys) {
+          const hNum = Number(hKey)
+          if (fromHour <= toHour) {
+            if (hNum < fromHour || hNum > toHour) continue
           } else {
-            // Cross-midnight case: start > end
-            shouldIncludeHour = hourNum >= startHourUTC || hourNum <= endHourUTC
+            // wrap-around case (should rarely happen for per-day filters, but safe)
+            if (!(hNum >= fromHour || hNum <= toHour)) continue
           }
+          const v = dy[hKey]
+          const c = typeof v === "number" ? v : Number(v) || 0
+          subtotal += c
         }
-        
-        if (shouldIncludeHour) {
-          const val = dayData[hour]
-          const count = typeof val === "number" ? val : Number(val) || 0
-          dayTotal += count
-        }
+        return subtotal
       }
-      
+
+      if (startUTCYear === endUTCYear && startUTCMonth === endUTCMonth && startUTCDay === endUTCDay) {
+        // Entire range falls on a single UTC calendar day
+        dayTotal += sumHoursForDay(startUTCYear, startUTCMonth, startUTCDay, startHourUTC, endHourUTC)
+      } else {
+        // Range spans two UTC days (possible when IST range crosses ~05:30 boundary)
+        // First UTC day: from startHourUTC to 23
+        dayTotal += sumHoursForDay(startUTCYear, startUTCMonth, startUTCDay, startHourUTC, 23)
+        // Second UTC day: from 0 to endHourUTC
+        dayTotal += sumHoursForDay(endUTCYear, endUTCMonth, endUTCDay, 0, endHourUTC)
+      }
+
       total += dayTotal
-      out.push({ 
-        ms: kolkataMs, 
-        label: formatDateAsiaKolkata(kolkataMs) + ` (${startTime} - ${endTime})`, 
-        count: dayTotal 
-      })
+      out.push({ ms: kolkataMs, label: formatDateAsiaKolkata(kolkataMs) + ` (${startTime} - ${endTime})`, count: dayTotal })
     }
     
     return { list: out, total }
@@ -549,93 +555,94 @@ function App() {
     // Convert Kolkata time inputs to UTC for database filtering
     const [startHourStr, startMinStr] = startTime.split(':')
     const [endHourStr, endMinStr] = endTime.split(':')
-    const startHourKolkata = parseInt(startHourStr)
-    const startMinKolkata = parseInt(startMinStr)
-    const endHourKolkata = parseInt(endHourStr)
-    const endMinKolkata = parseInt(endMinStr)
     
-    // Convert Kolkata to UTC (subtract 5:30)
-    const startHourUTC = (startHourKolkata - 5 + (startMinKolkata - 30 < 0 ? -1 : 0) + 24) % 24
-    const startMinUTC = (startMinKolkata - 30 + 60) % 60
-    const endHourUTC = (endHourKolkata - 5 + (endMinKolkata - 30 < 0 ? -1 : 0) + 24) % 24
-    const endMinUTC = (endMinKolkata - 30 + 60) % 60
+    // Convert Kolkata to UTC using proper timezone conversion
+    const startKolkataTime = new Date(`2025-01-01T${startHourStr}:${startMinStr}:00+05:30`)
+    const endKolkataTime = new Date(`2025-01-01T${endHourStr}:${endMinStr}:00+05:30`)
+    
+    const startHourUTC = startKolkataTime.getUTCHours()
+    const startMinUTC = startKolkataTime.getUTCMinutes()
+    const endHourUTC = endKolkataTime.getUTCHours()
+    const endMinUTC = endKolkataTime.getUTCMinutes()
     
     const out: Array<{ ms: number; label: string; count: number | null }> = []
     let total = 0
     
     for (let kolkataMs = start; kolkataMs <= end; kolkataMs += 86400000) {
-      // Convert Kolkata timestamp to UTC for database lookup
-      const utcMs = kolkataMs - (5.5 * 60 * 60 * 1000)
-      const utcDate = new Date(utcMs)
-      const utcYear = utcDate.getFullYear()
-      const utcMonth = (utcDate.getMonth() + 1).toString().padStart(2, '0')
-      const utcDay = utcDate.getDate().toString().padStart(2, '0')
-      
-      // Look up data using UTC date (database format)
-      const dayData = minutelyObj?.[utcYear]?.[utcMonth]?.[utcDay]
-      
-      if (!dayData) {
-        out.push({ ms: kolkataMs, label: formatDateAsiaKolkata(kolkataMs) + ` (${startTime} - ${endTime})`, count: null })
-        continue
-      }
-      
+      // Build explicit IST day string
+      const { year: istY, month: istM, day: istD } = getTZParts(kolkataMs, "Asia/Kolkata")
+      const istDateStr = `${istY}-${istM}-${istD}`
+
+      // Build precise IST start/end Date for this day, then read UTC parts
+      const startIST = new Date(`${istDateStr}T${startTime}:00+05:30`)
+      const endIST = new Date(`${istDateStr}T${endTime}:00+05:30`)
+
+      const startUTCYear = startIST.getUTCFullYear()
+      const startUTCMonth = (startIST.getUTCMonth() + 1).toString().padStart(2, '0')
+      const startUTCDay = startIST.getUTCDate().toString().padStart(2, '0')
+      const endUTCYear = endIST.getUTCFullYear()
+      const endUTCMonth = (endIST.getUTCMonth() + 1).toString().padStart(2, '0')
+      const endUTCDay = endIST.getUTCDate().toString().padStart(2, '0')
+
       let dayTotal = 0
-      const hours = Object.keys(dayData).sort((a, b) => Number(a) - Number(b))
-      
-      for (const hour of hours) {
-        const hourNum = parseInt(hour)
-        const hourData = dayData[hour]
-        
-        if (!hourData) continue
-        
-        const minutes = Object.keys(hourData).sort((a, b) => Number(a) - Number(b))
-        
-        for (const minute of minutes) {
-          const minNum = parseInt(minute)
-          
-          // Check if this UTC minute falls within our UTC time range
-          let shouldIncludeMinute = false
-          
-          if (startHourUTC === endHourUTC) {
-            // Same hour range in UTC
-            shouldIncludeMinute = hourNum === startHourUTC && minNum >= startMinUTC && minNum <= endMinUTC
+
+      // Helper to sum minutes within a UTC day with hour/minute bounds
+      function sumMinutesForDay(uy: string | number, um: string, ud: string, fromHour: number, fromMin: number, toHour: number, toMin: number) {
+        const dy = minutelyObj?.[uy]?.[um]?.[ud]
+        if (!dy) return 0
+        const hourKeys = Object.keys(dy).sort((a, b) => Number(a) - Number(b))
+        let subtotal = 0
+        for (const hKey of hourKeys) {
+          const hNum = Number(hKey)
+          if (fromHour === toHour) {
+            if (hNum !== fromHour) continue
+          } else if (fromHour < toHour) {
+            if (hNum < fromHour || hNum > toHour) continue
           } else {
-            // Different hours in UTC
-            if (startHourUTC < endHourUTC) {
-              // Normal case: start < end
-              if (hourNum > startHourUTC && hourNum < endHourUTC) {
-                shouldIncludeMinute = true // Full hour is included
-              } else if (hourNum === startHourUTC) {
-                shouldIncludeMinute = minNum >= startMinUTC // From start minute onwards
-              } else if (hourNum === endHourUTC) {
-                shouldIncludeMinute = minNum <= endMinUTC // Up to end minute
-              }
+            // wrap-around
+            if (!(hNum >= fromHour || hNum <= toHour)) continue
+          }
+          const minuteMap = dy[hKey]
+          if (!minuteMap) continue
+          const minKeys = Object.keys(minuteMap).sort((a, b) => Number(a) - Number(b))
+          for (const mKey of minKeys) {
+            const mNum = Number(mKey)
+            let include = false
+            if (fromHour === toHour) {
+              include = mNum >= fromMin && mNum <= toMin
+            } else if (fromHour < toHour) {
+              if (hNum > fromHour && hNum < toHour) include = true
+              else if (hNum === fromHour) include = mNum >= fromMin
+              else if (hNum === toHour) include = mNum <= toMin
             } else {
-              // Cross-midnight case: start > end
-              if (hourNum > startHourUTC || hourNum < endHourUTC) {
-                shouldIncludeMinute = true // Full hour is included
-              } else if (hourNum === startHourUTC) {
-                shouldIncludeMinute = minNum >= startMinUTC // From start minute onwards
-              } else if (hourNum === endHourUTC) {
-                shouldIncludeMinute = minNum <= endMinUTC // Up to end minute
-              }
+              // wrap-around
+              if (hNum > fromHour || hNum < toHour) include = true
+              else if (hNum === fromHour) include = mNum >= fromMin
+              else if (hNum === toHour) include = mNum <= toMin
+            }
+            if (include) {
+              const v = minuteMap[mKey]
+              const c = typeof v === "number" ? v : Number(v) || 0
+              subtotal += c
             }
           }
-          
-          if (shouldIncludeMinute) {
-            const val = hourData[minute]
-            const count = typeof val === "number" ? val : Number(val) || 0
-            dayTotal += count
-          }
         }
+        return subtotal
       }
-      
+
+      if (startUTCYear === endUTCYear && startUTCMonth === endUTCMonth && startUTCDay === endUTCDay) {
+        // Single UTC day
+        dayTotal += sumMinutesForDay(startUTCYear, startUTCMonth, startUTCDay, startHourUTC, startMinUTC, endHourUTC, endMinUTC)
+      } else {
+        // Spans two UTC days
+        // First day: from startHour:startMin to 23:59
+        dayTotal += sumMinutesForDay(startUTCYear, startUTCMonth, startUTCDay, startHourUTC, startMinUTC, 23, 59)
+        // Second day: from 00:00 to endHour:endMin
+        dayTotal += sumMinutesForDay(endUTCYear, endUTCMonth, endUTCDay, 0, 0, endHourUTC, endMinUTC)
+      }
+
       total += dayTotal
-      out.push({ 
-        ms: kolkataMs, 
-        label: formatDateAsiaKolkata(kolkataMs) + ` (${startTime} - ${endTime})`, 
-        count: dayTotal 
-      })
+      out.push({ ms: kolkataMs, label: formatDateAsiaKolkata(kolkataMs) + ` (${startTime} - ${endTime})`, count: dayTotal })
     }
     
     return { list: out, total }
