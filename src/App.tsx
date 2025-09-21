@@ -48,7 +48,7 @@ function App() {
   })
   const [filteredDaily, setFilteredDaily] = useState<Array<{ ms: number; label: string; count: number | null }>>([])
   const [filteredTotal, setFilteredTotal] = useState<number>(0)
-  
+
   // Time-wise filtering
   const [filterStartTime, setFilterStartTime] = useState<string>("00:00")
   const [filterEndTime, setFilterEndTime] = useState<string>("23:59")
@@ -293,27 +293,65 @@ function App() {
     return { year, month, day }
   }
 
+  function getKolkataTimeParts(utcMs: number) {
+    // Convert UTC to Kolkata time (GMT+5:30)
+    const kolkataMs = utcMs + (5.5 * 60 * 60 * 1000)
+    const date = new Date(kolkataMs)
+    const year = date.getFullYear()
+    const month = (date.getMonth() + 1).toString().padStart(2, '0')
+    const day = date.getDate().toString().padStart(2, '0')
+    const hour = date.getHours().toString().padStart(2, '0')
+    const minute = date.getMinutes().toString().padStart(2, '0')
+    return { year, month, day, hour, minute }
+  }
+
+  function getKolkataDateString(utcMs: number): string {
+    const { year, month, day } = getKolkataTimeParts(utcMs)
+    return `${year}-${month}-${day}`
+  }
+
+  function getKolkataHour(utcHour: number): number {
+    // Convert UTC hour to Kolkata hour
+    return (utcHour + 5) % 24
+  }
+
   function getDailyForTZDate(dailyObj: any, dayOffset: number): number | null {
     if (!dailyObj) return null
-    const baseMs = Date.now() + dayOffset * 86400000
-    const { year, month, day } = getTZParts(baseMs, "Asia/Kolkata")
     
-    // Check IST date first
-    let y = dailyObj?.[year]
-    let m = y?.[month]
-    let v = m?.[day]
+    // Get current UTC time
+    const currentUtcMs = Date.now()
+    // Convert to Kolkata time to get the correct Kolkata date
+    const currentKolkataMs = currentUtcMs + (5.5 * 60 * 60 * 1000)
+    const targetKolkataMs = currentKolkataMs + dayOffset * 86400000
     
-    // If not found, check UTC date (subtract 5.5 hours to get UTC date)
+    // Convert Kolkata timestamp back to UTC to find the corresponding UTC date in database
+    const utcMs = targetKolkataMs - (5.5 * 60 * 60 * 1000)
+    const utcDate = new Date(utcMs)
+    const utcYear = utcDate.getFullYear()
+    const utcMonth = (utcDate.getMonth() + 1).toString().padStart(2, '0')
+    const utcDay = utcDate.getDate().toString().padStart(2, '0')
+    
+    // Look up data using UTC date (database format)
+    const y = dailyObj?.[utcYear]
+    const m = y?.[utcMonth]
+    const v = m?.[utcDay]
+    
+    // If no data found for the target date, try to find the most recent available data
     if (v === null || v === undefined) {
-      const utcMs = baseMs - (5.5 * 60 * 60 * 1000)
-      const utcDate = new Date(utcMs)
-      const utcYear = utcDate.getFullYear()
-      const utcMonth = (utcDate.getMonth() + 1).toString().padStart(2, '0')
-      const utcDay = utcDate.getDate().toString().padStart(2, '0')
-      
-      y = dailyObj?.[utcYear]
-      m = y?.[utcMonth]
-      v = m?.[utcDay]
+      // Get all available years, months, and days
+      const years = Object.keys(dailyObj).sort((a, b) => Number(b) - Number(a))
+      for (const year of years) {
+        const months = Object.keys(dailyObj[year]).sort((a, b) => Number(b) - Number(a))
+        for (const month of months) {
+          const days = Object.keys(dailyObj[year][month]).sort((a, b) => Number(b) - Number(a))
+          for (const day of days) {
+            const val = dailyObj[year][month][day]
+            if (val !== null && val !== undefined) {
+              return typeof val === "number" ? val : Number(val) || null
+            }
+          }
+        }
+      }
     }
     
     return typeof v === "number" ? v : Number(v) || null
@@ -346,43 +384,44 @@ function App() {
     endTime?: string | null,
   ): { list: Array<{ ms: number; label: string; count: number | null }>; total: number } {
     if (!dailyObj || !startStr || !endStr) return { list: [], total: 0 }
-    let start = msAtStartOfIST(startStr)
-    let end = msAtStartOfIST(endStr)
-    if (Number.isNaN(start) || Number.isNaN(end)) return { list: [], total: 0 }
+    
+    // Convert Kolkata date strings to UTC timestamps for database lookup
+    const startKolkataMs = msAtStartOfIST(startStr)
+    const endKolkataMs = msAtStartOfIST(endStr)
+    
+    if (Number.isNaN(startKolkataMs) || Number.isNaN(endKolkataMs)) return { list: [], total: 0 }
+    
+    let start = startKolkataMs
+    let end = endKolkataMs
     if (start > end) {
       const t = start
       start = end
       end = t
     }
+    
     const out: Array<{ ms: number; label: string; count: number | null }> = []
     let total = 0
-    for (let ms = start; ms <= end; ms += 86400000) {
-      const { year, month, day } = getTZParts(ms, "Asia/Kolkata")
+    
+    for (let kolkataMs = start; kolkataMs <= end; kolkataMs += 86400000) {
+      // Convert Kolkata timestamp to UTC for database lookup
+      const utcMs = kolkataMs - (5.5 * 60 * 60 * 1000)
+      const utcDate = new Date(utcMs)
+      const utcYear = utcDate.getFullYear()
+      const utcMonth = (utcDate.getMonth() + 1).toString().padStart(2, '0')
+      const utcDay = utcDate.getDate().toString().padStart(2, '0')
       
-      // Check IST date first
-      let val = dailyObj?.[year]?.[month]?.[day]
-      
-      // If not found, check UTC date
-      if (val === null || val === undefined) {
-        const utcMs = ms - (5.5 * 60 * 60 * 1000)
-        const utcDate = new Date(utcMs)
-        const utcYear = utcDate.getFullYear()
-        const utcMonth = (utcDate.getMonth() + 1).toString().padStart(2, '0')
-        const utcDay = utcDate.getDate().toString().padStart(2, '0')
-        
-        val = dailyObj?.[utcYear]?.[utcMonth]?.[utcDay]
-      }
-      
+      // Look up data using UTC date (database format)
+      const val = dailyObj?.[utcYear]?.[utcMonth]?.[utcDay]
       const count = typeof val === "number" ? val : Number(val) || null
       if (typeof count === "number") total += count
       
-      // Format label with time range if time filtering is enabled
-      let label = formatDateAsiaKolkata(ms)
+      // Format label with Kolkata date
+      let label = formatDateAsiaKolkata(kolkataMs)
       if (startTime && endTime) {
         label += ` (${startTime} - ${endTime})`
       }
       
-      out.push({ ms, label, count })
+      out.push({ ms: kolkataMs, label, count })
     }
     return { list: out, total }
   }
@@ -396,48 +435,50 @@ function App() {
   ): { list: Array<{ ms: number; label: string; count: number | null }>; total: number } {
     if (!hourlyObj || !startStr || !endStr) return { list: [], total: 0 }
     
-    let start = msAtStartOfIST(startStr)
-    let end = msAtStartOfIST(endStr)
-    if (Number.isNaN(start) || Number.isNaN(end)) return { list: [], total: 0 }
+    // Convert Kolkata date strings to UTC timestamps for database lookup
+    const startKolkataMs = msAtStartOfIST(startStr)
+    const endKolkataMs = msAtStartOfIST(endStr)
+    
+    if (Number.isNaN(startKolkataMs) || Number.isNaN(endKolkataMs)) return { list: [], total: 0 }
+    
+    let start = startKolkataMs
+    let end = endKolkataMs
     if (start > end) {
       const t = start
       start = end
       end = t
     }
 
-    // Convert IST time inputs to UTC for database filtering
+    // Convert Kolkata time inputs to UTC for database filtering
     const [startHourStr, startMinStr] = startTime.split(':')
     const [endHourStr, endMinStr] = endTime.split(':')
-    const startHourIST = parseInt(startHourStr)
-    const startMinIST = parseInt(startMinStr)
-    const endHourIST = parseInt(endHourStr)
-    const endMinIST = parseInt(endMinStr)
+    const startHourKolkata = parseInt(startHourStr)
+    const startMinKolkata = parseInt(startMinStr)
+    const endHourKolkata = parseInt(endHourStr)
+    const endMinKolkata = parseInt(endMinStr)
     
-    // Convert IST to UTC (subtract 5:30)
-    const startHourUTC = (startHourIST - 5 + (startMinIST - 30 < 0 ? -1 : 0) + 24) % 24
-    const startMinUTC = (startMinIST - 30 + 60) % 60
-    const endHourUTC = (endHourIST - 5 + (endMinIST - 30 < 0 ? -1 : 0) + 24) % 24
-    const endMinUTC = (endMinIST - 30 + 60) % 60
+    // Convert Kolkata to UTC (subtract 5:30)
+    const startHourUTC = (startHourKolkata - 5 + (startMinKolkata - 30 < 0 ? -1 : 0) + 24) % 24
+    const startMinUTC = (startMinKolkata - 30 + 60) % 60
+    const endHourUTC = (endHourKolkata - 5 + (endMinKolkata - 30 < 0 ? -1 : 0) + 24) % 24
+    const endMinUTC = (endMinKolkata - 30 + 60) % 60
     
     const out: Array<{ ms: number; label: string; count: number | null }> = []
     let total = 0
     
-    for (let ms = start; ms <= end; ms += 86400000) {
-      // Get IST date for this day
-      const istDateStr = getISTDateFromUTC(ms)
-      const { year, month, day } = getTZParts(ms, "Asia/Kolkata")
+    for (let kolkataMs = start; kolkataMs <= end; kolkataMs += 86400000) {
+      // Convert Kolkata timestamp to UTC for database lookup
+      const utcMs = kolkataMs - (5.5 * 60 * 60 * 1000)
+      const utcDate = new Date(utcMs)
+      const utcYear = utcDate.getFullYear()
+      const utcMonth = (utcDate.getMonth() + 1).toString().padStart(2, '0')
+      const utcDay = utcDate.getDate().toString().padStart(2, '0')
       
-      // Check both IST date and UTC date in database
-      const dayDataIST = hourlyObj?.[year]?.[month]?.[day]
-      const istYear = istDateStr.split('-')[0]
-      const istMonth = istDateStr.split('-')[1]
-      const istDay = istDateStr.split('-')[2]
-      const dayDataUTC = hourlyObj?.[istYear]?.[istMonth]?.[istDay]
-      
-      const dayData = dayDataIST || dayDataUTC
+      // Look up data using UTC date (database format)
+      const dayData = hourlyObj?.[utcYear]?.[utcMonth]?.[utcDay]
       
       if (!dayData) {
-        out.push({ ms, label: formatDateAsiaKolkata(ms) + ` (${startTime} - ${endTime} IST)`, count: null })
+        out.push({ ms: kolkataMs, label: formatDateAsiaKolkata(kolkataMs) + ` (${startTime} - ${endTime})`, count: null })
         continue
       }
       
@@ -456,10 +497,10 @@ function App() {
         } else {
           // Different hours in UTC
           if (startHourUTC < endHourUTC) {
-            // Normal case: start < end (e.g., 09:00 - 17:00 IST = 03:30 - 11:30 UTC)
+            // Normal case: start < end
             shouldIncludeHour = hourNum >= startHourUTC && hourNum <= endHourUTC
           } else {
-            // Cross-midnight case: start > end (e.g., 22:00 - 06:00 IST = 16:30 - 00:30 UTC)
+            // Cross-midnight case: start > end
             shouldIncludeHour = hourNum >= startHourUTC || hourNum <= endHourUTC
           }
         }
@@ -473,8 +514,8 @@ function App() {
       
       total += dayTotal
       out.push({ 
-        ms, 
-        label: formatDateAsiaKolkata(ms) + ` (${startTime} - ${endTime} IST)`, 
+        ms: kolkataMs, 
+        label: formatDateAsiaKolkata(kolkataMs) + ` (${startTime} - ${endTime})`, 
         count: dayTotal 
       })
     }
@@ -491,48 +532,50 @@ function App() {
   ): { list: Array<{ ms: number; label: string; count: number | null }>; total: number } {
     if (!minutelyObj || !startStr || !endStr) return { list: [], total: 0 }
     
-    let start = msAtStartOfIST(startStr)
-    let end = msAtStartOfIST(endStr)
-    if (Number.isNaN(start) || Number.isNaN(end)) return { list: [], total: 0 }
+    // Convert Kolkata date strings to UTC timestamps for database lookup
+    const startKolkataMs = msAtStartOfIST(startStr)
+    const endKolkataMs = msAtStartOfIST(endStr)
+    
+    if (Number.isNaN(startKolkataMs) || Number.isNaN(endKolkataMs)) return { list: [], total: 0 }
+    
+    let start = startKolkataMs
+    let end = endKolkataMs
     if (start > end) {
       const t = start
       start = end
       end = t
     }
 
-    // Convert IST time inputs to UTC for database filtering
+    // Convert Kolkata time inputs to UTC for database filtering
     const [startHourStr, startMinStr] = startTime.split(':')
     const [endHourStr, endMinStr] = endTime.split(':')
-    const startHourIST = parseInt(startHourStr)
-    const startMinIST = parseInt(startMinStr)
-    const endHourIST = parseInt(endHourStr)
-    const endMinIST = parseInt(endMinStr)
+    const startHourKolkata = parseInt(startHourStr)
+    const startMinKolkata = parseInt(startMinStr)
+    const endHourKolkata = parseInt(endHourStr)
+    const endMinKolkata = parseInt(endMinStr)
     
-    // Convert IST to UTC (subtract 5:30)
-    const startHourUTC = (startHourIST - 5 + (startMinIST - 30 < 0 ? -1 : 0) + 24) % 24
-    const startMinUTC = (startMinIST - 30 + 60) % 60
-    const endHourUTC = (endHourIST - 5 + (endMinIST - 30 < 0 ? -1 : 0) + 24) % 24
-    const endMinUTC = (endMinIST - 30 + 60) % 60
+    // Convert Kolkata to UTC (subtract 5:30)
+    const startHourUTC = (startHourKolkata - 5 + (startMinKolkata - 30 < 0 ? -1 : 0) + 24) % 24
+    const startMinUTC = (startMinKolkata - 30 + 60) % 60
+    const endHourUTC = (endHourKolkata - 5 + (endMinKolkata - 30 < 0 ? -1 : 0) + 24) % 24
+    const endMinUTC = (endMinKolkata - 30 + 60) % 60
     
     const out: Array<{ ms: number; label: string; count: number | null }> = []
     let total = 0
     
-    for (let ms = start; ms <= end; ms += 86400000) {
-      // Get IST date for this day
-      const istDateStr = getISTDateFromUTC(ms)
-      const { year, month, day } = getTZParts(ms, "Asia/Kolkata")
+    for (let kolkataMs = start; kolkataMs <= end; kolkataMs += 86400000) {
+      // Convert Kolkata timestamp to UTC for database lookup
+      const utcMs = kolkataMs - (5.5 * 60 * 60 * 1000)
+      const utcDate = new Date(utcMs)
+      const utcYear = utcDate.getFullYear()
+      const utcMonth = (utcDate.getMonth() + 1).toString().padStart(2, '0')
+      const utcDay = utcDate.getDate().toString().padStart(2, '0')
       
-      // Check both IST date and UTC date in database
-      const dayDataIST = minutelyObj?.[year]?.[month]?.[day]
-      const istYear = istDateStr.split('-')[0]
-      const istMonth = istDateStr.split('-')[1]
-      const istDay = istDateStr.split('-')[2]
-      const dayDataUTC = minutelyObj?.[istYear]?.[istMonth]?.[istDay]
-      
-      const dayData = dayDataIST || dayDataUTC
+      // Look up data using UTC date (database format)
+      const dayData = minutelyObj?.[utcYear]?.[utcMonth]?.[utcDay]
       
       if (!dayData) {
-        out.push({ ms, label: formatDateAsiaKolkata(ms) + ` (${startTime} - ${endTime} IST)`, count: null })
+        out.push({ ms: kolkataMs, label: formatDateAsiaKolkata(kolkataMs) + ` (${startTime} - ${endTime})`, count: null })
         continue
       }
       
@@ -589,8 +632,8 @@ function App() {
       
       total += dayTotal
       out.push({ 
-        ms, 
-        label: formatDateAsiaKolkata(ms) + ` (${startTime} - ${endTime} IST)`, 
+        ms: kolkataMs, 
+        label: formatDateAsiaKolkata(kolkataMs) + ` (${startTime} - ${endTime})`, 
         count: dayTotal 
       })
     }
@@ -701,7 +744,7 @@ function App() {
     }
 
     // Prepare CSV data
-    const csvHeaders = ["Date (IST)", "Time (IST)", "Count"]
+    const csvHeaders = ["Date (Kolkata)", "Time (Kolkata)", "Count"]
     const csvRows = [csvHeaders.join(",")]
     
     // Get all years, months, and days from hourly data
@@ -721,18 +764,18 @@ function App() {
           
           // Create UTC timestamp for this day
           const utcMs = new Date(`${year}-${month}-${day}T00:00:00Z`).getTime()
-          // Convert to IST date
-          const istDateStr = getISTDateFromUTC(utcMs)
-          const dateIST = formatDateAsiaKolkata(msAtStartOfIST(istDateStr))
+          // Convert to Kolkata date
+          const kolkataDateStr = getKolkataDateString(utcMs)
+          const dateKolkata = formatDateAsiaKolkata(msAtStartOfIST(kolkataDateStr))
           
           hours.forEach(hourUTC => {
             const count = dayData[hourUTC]
-            // Convert UTC hour to IST hour for display
-            const hourIST = getISTHourFromUTC(parseInt(hourUTC))
-            const hourISTStr = hourIST.toString().padStart(2, '0')
-            const timeRange = `${hourISTStr}:00 - ${hourISTStr}:59`
+            // Convert UTC hour to Kolkata hour for display
+            const hourKolkata = getKolkataHour(parseInt(hourUTC))
+            const hourKolkataStr = hourKolkata.toString().padStart(2, '0')
+            const timeRange = `${hourKolkataStr}:00 - ${hourKolkataStr}:59`
             
-            csvRows.push([dateIST, timeRange, count].join(","))
+            csvRows.push([dateKolkata, timeRange, count].join(","))
           })
         })
       })
@@ -885,7 +928,7 @@ function App() {
   // Compute current inside as today's entry minus today's exit
   const insideCountToday: number | null =
     typeof todaysTotal === "number" && typeof exitTodaysTotal === "number"
-      ? todaysTotal - exitTodaysTotal
+      ? Math.max(0, todaysTotal - exitTodaysTotal) // Show 0 if negative
       : null
 
   return (
@@ -1178,24 +1221,24 @@ function App() {
                   {/* Date Filters */}
                   <div className="space-y-3">
                     <div className="text-sm font-medium text-gray-700 border-b border-gray-200 pb-2">Date Range</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <div className="text-xs text-gray-600 mb-1">Start date</div>
-                        <Input
-                          type="date"
-                          value={filterStartDate}
-                          onChange={(e) => setFilterStartDate(e.target.value)}
-                          className="bg-white border-gray-300 text-gray-900"
-                        />
-                      </div>
-                      <div>
-                        <div className="text-xs text-gray-600 mb-1">End date</div>
-                        <Input
-                          type="date"
-                          value={filterEndDate}
-                          onChange={(e) => setFilterEndDate(e.target.value)}
-                          className="bg-white border-gray-300 text-gray-900"
-                        />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs text-gray-600 mb-1">Start date</div>
+                      <Input
+                        type="date"
+                        value={filterStartDate}
+                        onChange={(e) => setFilterStartDate(e.target.value)}
+                        className="bg-white border-gray-300 text-gray-900"
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-600 mb-1">End date</div>
+                      <Input
+                        type="date"
+                        value={filterEndDate}
+                        onChange={(e) => setFilterEndDate(e.target.value)}
+                        className="bg-white border-gray-300 text-gray-900"
+                      />
                       </div>
                     </div>
                   </div>
