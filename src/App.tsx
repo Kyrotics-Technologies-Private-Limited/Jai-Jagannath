@@ -34,6 +34,8 @@ function App() {
   const [exitYesterdaysTotal, setExitYesterdaysTotal] = useState<number | null>(null)
   const [exitYearlyTotal, setExitYearlyTotal] = useState<number | null>(null)
   const [dailyExit, setDailyExit] = useState<any | null>(null)
+  const [hourlyExitData, setHourlyExitData] = useState<any | null>(null)
+  const [minutelyExitData, setMinutelyExitData] = useState<any | null>(null)
 
   // Date-wise filtering (IST only)
   const [dailyEntrance, setDailyEntrance] = useState<any | null>(null)
@@ -98,23 +100,20 @@ function App() {
     return () => unsubscribe()
   }, [])
 
-  // Subscribe to aggregates for entrance
-  useEffect(() => {
-    const dailyRef = ref(db, "aggregates/daily/entrance")
-    const unsubDaily = onValue(dailyRef, (snap) => {
-      const dailyObj = snap.val()
-      setDailyEntrance(dailyObj)
-      setTodaysTotal(getDailyForTZDate(dailyObj, 0))
-      setYesterdaysTotal(getDailyForTZDate(dailyObj, -1))
-      // Note: Filtered data will be updated by the useEffect that depends on both daily and hourly data
-    })
-
-    const hourlyRef = ref(db, "aggregates/hourly/entrance")
-    const unsubHourly = onValue(hourlyRef, (snap) => {
-      const hourlyData = snap.val()
-      setHourlyEntranceData(hourlyData)
-      setLastHourCount(pickLatest4Level(hourlyData))
-    })
+    // Subscribe to aggregates for entrance
+    useEffect(() => {
+      const dailyRef = ref(db, "aggregates/daily/entrance")
+      const unsubDaily = onValue(dailyRef, (snap) => {
+        const dailyObj = snap.val()
+        setDailyEntrance(dailyObj)
+        // NOTE: IST "today/yesterday" are computed from minutely/hourly data below
+      })
+  
+      const hourlyRef = ref(db, "aggregates/hourly/entrance")
+      const unsubHourly = onValue(hourlyRef, (snap) => {
+        const hourlyData = snap.val()
+        setHourlyEntranceData(hourlyData)
+      })
 
     const minutelyRef = ref(db, "aggregates/minutely/entrance")
     const unsubMinutely = onValue(minutelyRef, (snap) => {
@@ -150,18 +149,19 @@ function App() {
     const unsubDaily = onValue(dailyRef, (snap) => {
       const dailyObj = snap.val()
       setDailyExit(dailyObj)
-      setExitTodaysTotal(getDailyForTZDate(dailyObj, 0))
-      setExitYesterdaysTotal(getDailyForTZDate(dailyObj, -1))
     })
 
     const hourlyRef = ref(db, "aggregates/hourly/exit")
     const unsubHourly = onValue(hourlyRef, (snap) => {
-      setExitLastHourCount(pickLatest4Level(snap.val()))
+      const hourlyData = snap.val()
+      setHourlyExitData(hourlyData)
     })
 
     const minutelyRef = ref(db, "aggregates/minutely/exit")
     const unsubMinutely = onValue(minutelyRef, (snap) => {
-      setExitLiveMinuteCount(pickLatest5Level(snap.val()))
+      const minutelyData = snap.val()
+      setMinutelyExitData(minutelyData)
+      setExitLiveMinuteCount(pickLatest5Level(minutelyData))
     })
 
     const monthlyRef = ref(db, "aggregates/monthly/exit")
@@ -184,6 +184,81 @@ function App() {
       unsubYearly()
     }
   }, [])
+
+  useEffect(() => {
+    if (!minutelyEntranceData && !hourlyEntranceData) return
+  
+    const todayIST = getTodayDateString()
+    const yesterdayIST = (() => {
+      const ms = Date.now() - 86400000
+      const { year, month, day } = getTZParts(ms, "Asia/Kolkata")
+      return `${year}-${month}-${day}`
+    })()
+  
+    if (minutelyEntranceData) {
+      setTodaysTotal(
+        generateMinutelyTimeFilteredData(todayIST, todayIST, minutelyEntranceData, "00:00", "23:59").total
+      )
+      setYesterdaysTotal(
+        generateMinutelyTimeFilteredData(yesterdayIST, yesterdayIST, minutelyEntranceData, "00:00", "23:59").total
+      )
+
+      // Previous full hour window in IST (e.g., 09:00-09:59 when current time is 10:xx)
+      const nowUTC = Date.now()
+      const { startDateIST, startTimeIST, endDateIST, endTimeIST } = getPreviousFullHourISTWindow(nowUTC)
+      setLastHourCount(getMinutelyTotalForISTWindow(minutelyEntranceData, startDateIST, startTimeIST, endDateIST, endTimeIST))
+    } else if (hourlyEntranceData) {
+      // Fallback (hour-level, minute precision unavailable)
+      setTodaysTotal(
+        generateTimeFilteredData(todayIST, todayIST, hourlyEntranceData, "00:00", "23:59").total
+      )
+      setYesterdaysTotal(
+        generateTimeFilteredData(yesterdayIST, yesterdayIST, hourlyEntranceData, "00:00", "23:59").total
+      )
+
+      // Previous full hour window in IST (hour-level approximation)
+      const nowUTC = Date.now()
+      const { startDateIST, startTimeIST, endDateIST, endTimeIST } = getPreviousFullHourISTWindow(nowUTC)
+      setLastHourCount(getHourlyTotalForISTWindow(hourlyEntranceData, startDateIST, startTimeIST, endDateIST, endTimeIST))
+    }
+  }, [minutelyEntranceData, hourlyEntranceData])
+
+  useEffect(() => {
+    if (!minutelyExitData && !hourlyExitData) return
+  
+    const todayIST = getTodayDateString()
+    const yesterdayIST = (() => {
+      const ms = Date.now() - 86400000
+      const { year, month, day } = getTZParts(ms, "Asia/Kolkata")
+      return `${year}-${month}-${day}`
+    })()
+  
+    if (minutelyExitData) {
+      setExitTodaysTotal(
+        generateMinutelyTimeFilteredData(todayIST, todayIST, minutelyExitData, "00:00", "23:59").total
+      )
+      setExitYesterdaysTotal(
+        generateMinutelyTimeFilteredData(yesterdayIST, yesterdayIST, minutelyExitData, "00:00", "23:59").total
+      )
+
+      // Previous full hour window in IST (exit)
+      const nowUTC = Date.now()
+      const { startDateIST, startTimeIST, endDateIST, endTimeIST } = getPreviousFullHourISTWindow(nowUTC)
+      setExitLastHourCount(getMinutelyTotalForISTWindow(minutelyExitData, startDateIST, startTimeIST, endDateIST, endTimeIST))
+    } else if (hourlyExitData) {
+      setExitTodaysTotal(
+        generateTimeFilteredData(todayIST, todayIST, hourlyExitData, "00:00", "23:59").total
+      )
+      setExitYesterdaysTotal(
+        generateTimeFilteredData(yesterdayIST, yesterdayIST, hourlyExitData, "00:00", "23:59").total
+      )
+
+      // Previous full hour window in IST (hour-level approximation) for exit
+      const nowUTC = Date.now()
+      const { startDateIST, startTimeIST, endDateIST, endTimeIST } = getPreviousFullHourISTWindow(nowUTC)
+      setExitLastHourCount(getHourlyTotalForISTWindow(hourlyExitData, startDateIST, startTimeIST, endDateIST, endTimeIST))
+    }
+  }, [minutelyExitData, hourlyExitData])
 
   useEffect(() => {
     let gen
@@ -648,6 +723,78 @@ function App() {
     return { list: out, total }
   }
 
+  // Compute total for an arbitrary IST window using minutely data.
+  // Handles windows that may span two IST dates by splitting the range.
+  function getMinutelyTotalForISTWindow(
+    minutelyObj: any,
+    startDateIST: string,
+    startTimeIST: string,
+    endDateIST: string,
+    endTimeIST: string,
+  ): number {
+    if (!minutelyObj) return 0
+    if (startDateIST === endDateIST) {
+      return generateMinutelyTimeFilteredData(startDateIST, endDateIST, minutelyObj, startTimeIST, endTimeIST).total
+    }
+    const firstDay = generateMinutelyTimeFilteredData(startDateIST, startDateIST, minutelyObj, startTimeIST, "23:59").total
+    const secondDay = generateMinutelyTimeFilteredData(endDateIST, endDateIST, minutelyObj, "00:00", endTimeIST).total
+    return firstDay + secondDay
+  }
+
+  // Approximate total for an arbitrary IST window using hourly data (hour granularity).
+  // Splits across days similar to the minutely helper.
+  function getHourlyTotalForISTWindow(
+    hourlyObj: any,
+    startDateIST: string,
+    startTimeIST: string,
+    endDateIST: string,
+    endTimeIST: string,
+  ): number {
+    if (!hourlyObj) return 0
+    if (startDateIST === endDateIST) {
+      return generateTimeFilteredData(startDateIST, endDateIST, hourlyObj, startTimeIST, endTimeIST).total
+    }
+    const firstDay = generateTimeFilteredData(startDateIST, startDateIST, hourlyObj, startTimeIST, "23:59").total
+    const secondDay = generateTimeFilteredData(endDateIST, endDateIST, hourlyObj, "00:00", endTimeIST).total
+    return firstDay + secondDay
+  }
+
+  function getISTDateTimeStrings(utcMs: number): { date: string; time: string } {
+    const d = new Date(utcMs)
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(d)
+    const year = parts.find(p => p.type === "year")?.value || ""
+    const month = parts.find(p => p.type === "month")?.value || ""
+    const day = parts.find(p => p.type === "day")?.value || ""
+    const hour = parts.find(p => p.type === "hour")?.value || "00"
+    const minute = parts.find(p => p.type === "minute")?.value || "00"
+    return { date: `${year}-${month}-${day}`, time: `${hour}:${minute}` }
+  }
+
+  function getPreviousFullHourISTWindow(nowUtcMs: number): {
+    startDateIST: string; startTimeIST: string; endDateIST: string; endTimeIST: string
+  } {
+    const { date: currDateIST, time: currTimeIST } = getISTDateTimeStrings(nowUtcMs)
+    const currHour = currTimeIST.split(":")[0]
+    // Current hour start in IST
+    const currHourStartIST = new Date(`${currDateIST}T${currHour}:00:00+05:30`)
+    // Previous hour window
+    const prevHourStartUtcMs = currHourStartIST.getTime() - 60 * 60 * 1000
+    const prevHourEndUtcMs = currHourStartIST.getTime() - 1000 // 59:59 of previous hour
+    const { date: startDateIST, time: startTimePart } = getISTDateTimeStrings(prevHourStartUtcMs)
+    const { date: endDateIST, time: endTimePart } = getISTDateTimeStrings(prevHourEndUtcMs)
+    const startTimeIST = `${startTimePart.split(":")[0]}:00`
+    const endTimeIST = `${endTimePart.split(":")[0]}:59`
+    return { startDateIST, startTimeIST, endDateIST, endTimeIST }
+  }
+
   function getOrdinalSuffix(n: number): string {
     const mod100 = n % 100
     if (mod100 >= 11 && mod100 <= 13) return "th"
@@ -777,11 +924,12 @@ function App() {
           
           hours.forEach(hourUTC => {
             const count = dayData[hourUTC]
-            // Convert UTC hour to Kolkata hour for display
-            const hourKolkata = getKolkataHour(parseInt(hourUTC))
-            const hourKolkataStr = hourKolkata.toString().padStart(2, '0')
-            const timeRange = `${hourKolkataStr}:00 - ${hourKolkataStr}:59`
-            
+            // Convert UTC hour to IST window (HH:30 - next HH:29)
+            const hUTC = parseInt(hourUTC, 10)
+            const startH = (hUTC + 5) % 24
+            const endH = (hUTC + 6) % 24
+            const timeRange = `${startH.toString().padStart(2,'0')}:30 - ${endH.toString().padStart(2,'0')}:29`
+
             csvRows.push([dateKolkata, timeRange, count].join(","))
           })
         })
